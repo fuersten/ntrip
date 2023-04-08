@@ -17,7 +17,7 @@ if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release")
 endif(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11 -pthread")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -pthread")
 if ("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wfatal-errors")
 endif("${CMAKE_CXX_COMPILER_ID}" MATCHES "GNU")
@@ -47,6 +47,7 @@ configure_file(
 )
 
 aux_source_directory(src src_MAIN)
+file(GLOB_RECURSE include_MAIN *.h)
 
 if (NOT NTRIP_BUILD_CASTER)
   list(REMOVE_ITEM src_MAIN "src/ntrip_caster.cc")
@@ -60,6 +61,7 @@ endif ()
 
 add_library(${PROJECT_NAME}
   ${src_MAIN}
+  ${include_MAIN}
 )
 
 if (WIN32)

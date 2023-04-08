@@ -33,7 +33,6 @@
 #endif  // defined(__linux__)
 #include <errno.h>
 #include <time.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -61,7 +60,7 @@ constexpr char gpgga_buffer[] =
     "1,08,1.0,0.000,M,100.000,M,,*57\r\n";
 
 constexpr int kBufferSize = 4096;
-constexpr int kReceiveTimeoutPeriod = 3;
+constexpr int kReceiveTimeoutPeriod = 10;
 
 }  // namespace
 
@@ -86,7 +85,7 @@ bool NtripClient::Run(void) {
   }
   socket_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   if (socket_fd == INVALID_SOCKET) {
-    printf("Create socket failed!\r\n");
+    message_callback_(1, "Create socket failed!");
     WSACleanup();
     return false;
   }
@@ -94,14 +93,18 @@ bool NtripClient::Run(void) {
 #else
   socket_fd = socket(AF_INET, SOCK_STREAM, 0);
   if (socket_fd == -1) {
-    printf("Create socket failed, errno = -%d\r\n", errno);
+    char buf[256];
+    snprintf(buf, 255, "Create socket failed, errno = -%d", errno);
+    message_callback_(1, buf);
     return false;
   }
 #endif  // defined(WIN32) || defined(_WIN32)
   if (connect(socket_fd, reinterpret_cast<struct sockaddr *>(&server_addr),
       sizeof(server_addr)) < 0) {
-    printf("Connect to NtripCaster[%s:%d] failed, errno = -%d\r\n",
+    char buf[256];
+    snprintf(buf, 255, "Connect to NtripCaster[%s:%d] failed, errno = -%d",
         server_ip_.c_str(), server_port_, errno);
+    message_callback_(1, buf);
 #if defined(WIN32) || defined(_WIN32)
     closesocket(socket_fd);
     WSACleanup();
@@ -138,7 +141,7 @@ bool NtripClient::Run(void) {
       "\r\n",
       mountpoint_.c_str(), kClientAgent, user_passwd_base64.c_str());
   if (send(socket_fd, buffer.get(), ret, 0) < 0) {
-    printf("Send request failed!!!\r\n");
+    message_callback_(1, "Send request failed!!!");
 #if defined(WIN32) || defined(_WIN32)
     closesocket(socket_fd);
     WSACleanup();
@@ -155,12 +158,15 @@ bool NtripClient::Run(void) {
       std::string result(buffer.get(), ret);
       if ((result.find("HTTP/1.1 200 OK") != std::string::npos) ||
           (result.find("ICY 200 OK") != std::string::npos)) {
-        if (gga_buffer_.empty()) {
-          GGAFrameGenerate(latitude_, longitude_, 10.0, &gga_buffer_);
+        std::string gga_buffer;
+        if (!gga_is_update_.load()) {
+          GGAFrameGenerate(latitude_, longitude_, 1, 30, 10.0, -2.860, &gga_buffer);
+        } else {
+          gga_buffer = get_gga_buffer();
         }
-        ret = send(socket_fd, gga_buffer_.c_str(), gga_buffer_.size(), 0);
+        ret = send(socket_fd, gga_buffer.c_str(), gga_buffer.size(), 0);
         if (ret < 0) {
-          printf("Send gpgga data fail\r\n");
+          message_callback_(1, "Send gpgga data fail");
 #if defined(WIN32) || defined(_WIN32)
           closesocket(socket_fd);
           WSACleanup();
@@ -171,10 +177,12 @@ bool NtripClient::Run(void) {
         }
         break;
       } else {
-        printf("Request result: %s\r\n", result.c_str());
+        char buf[256];
+        snprintf(buf, 255, "Request result: %s", result.c_str());
+        message_callback_(1, buf);
       }
     } else if (ret == 0) {
-      printf("Remote socket close!!!\r\n");
+      message_callback_(1, "Remote socket close!!!");
 #if defined(WIN32) || defined(_WIN32)
       closesocket(socket_fd);
       WSACleanup();
@@ -186,9 +194,11 @@ bool NtripClient::Run(void) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
   if (timeout <= 0) {
-    printf("NtripCaster[%s:%d %s %s %s] access failed!!!\r\n",
+    char buf[256];
+    snprintf(buf, 255, "NtripCaster[%s:%d %s %s %s] access failed!!!",
         server_ip_.c_str(), server_port_,
         user_.c_str(), passwd_.c_str(), mountpoint_.c_str());
+    message_callback_(1, buf);
 #if defined(WIN32) || defined(_WIN32)
     closesocket(socket_fd);
     WSACleanup();
@@ -216,6 +226,10 @@ bool NtripClient::Run(void) {
 }
 
 void NtripClient::Stop(void) {
+  if (service_is_running_.load()) {
+    service_is_running_.store(false);
+    message_callback_(0, "Stopping NtripClient service");
+  }
   service_is_running_.store(false);
 #if defined(WIN32) || defined(_WIN32)
   if (socket_fd_ != INVALID_SOCKET) {
@@ -245,16 +259,18 @@ void NtripClient::ThreadHandler(void) {
   auto tp_end = tp_beg;
   int intv_ms = report_interval_ * 1000;
   int receive_timeout_cnt = kReceiveTimeoutPeriod;
-  printf("NtripClient service running...\r\n");
+  message_callback_(0, "NtripClient service running...");
   while (service_is_running_.load()) {
     ret = recv(socket_fd_, buffer.get(), kBufferSize, 0);
     if (ret == 0) {
-      printf("Remote socket close!!!\r\n");
+      message_callback_(1, "Remote peer closed socket");
       break;
     } else if (ret < 0) {
       if ((errno != 0) && (errno != EAGAIN) &&
           (errno != EWOULDBLOCK) && (errno != EINTR)) {
-        printf("Remote socket error, errno=%d\r\n", errno);
+        char buf[256];
+        snprintf(buf, 255, "Remote socket error, errno=%d", errno);
+        message_callback_(1, buf);
         break;
       }
     } else {
@@ -265,12 +281,18 @@ void NtripClient::ThreadHandler(void) {
     tp_end = std::chrono::steady_clock::now();
     if (std::chrono::duration_cast<std::chrono::milliseconds>(
         tp_end-tp_beg).count() >= intv_ms) {
-      if (receive_timeout_cnt-- <= 0) break;
-      tp_beg = std::chrono::steady_clock::now();
-      if (!gga_is_update_.load()) {
-        GGAFrameGenerate(latitude_, longitude_, 10.0, &gga_buffer_);
+      if (receive_timeout_cnt-- <= 0) {
+        message_callback_(1, "Remote peer timeout");
+        break;
       }
-      send(socket_fd_, gga_buffer_.c_str(), gga_buffer_.size(), 0);
+      tp_beg = std::chrono::steady_clock::now();
+      std::string gga_buffer;
+      if (!gga_is_update_.load()) {
+        GGAFrameGenerate(latitude_, longitude_, 1, 30, 10.0, -2.860, &gga_buffer);
+      } else {
+        gga_buffer = get_gga_buffer();
+      }
+      send(socket_fd_, gga_buffer.c_str(), gga_buffer.size(), 0);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
@@ -286,7 +308,7 @@ void NtripClient::ThreadHandler(void) {
     socket_fd_ = -1;
   }
 #endif  // defined(WIN32) | defined(_WIN32)
-  printf("NtripClient service done.\r\n");
+  message_callback_(0, "NtripClient service done.");
   service_is_running_.store(false);
 }
 

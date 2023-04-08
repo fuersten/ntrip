@@ -113,8 +113,8 @@ int Base64Decode(std::string const& raw, std::string* out) {
   return 0;
 }
 
-int GGAFrameGenerate(double latitude, double longitude,
-    double altitude, std::string* gga_out) {
+int GGAFrameGenerate(double latitude, double longitude, int position_fix, int number_satellites,
+                     double altitude, double undulation, std::string* gga_out) {
   if (gga_out == nullptr) return -1;
   char src[256] = {0};
   time_t time_now = time(nullptr);
@@ -126,14 +126,15 @@ int GGAFrameGenerate(double latitude, double longitude,
 #endif
   char *ptr = src;
   ptr += snprintf(ptr, sizeof(src)+src-ptr,
-      "$GPGGA,%02.0f%02.0f%05.2f,%012.7f,%s,%013.7f,%s,1,"
-      "30,1.2,%.4f,M,-2.860,M,,0000",
+      "$GPGGA,%02.0f%02.0f%05.2f,%012.7f,%s,%013.7f,%s,%d,"
+      "%d,1.2,%.4f,M,%.4f,M,,0000",
       tm_now.tm_hour*1.0, tm_now.tm_min*1.0, tm_now.tm_sec*1.0,
       fabs(DegreeConvertToDDMM(latitude))*100.0,
       latitude > 0.0 ? "N" : "S",
       fabs(DegreeConvertToDDMM(longitude))*100.0,
       longitude > 0.0 ? "E" : "W",
-      altitude);
+      position_fix, number_satellites,
+      altitude, undulation);
   uint8_t checksum = 0;
   for (char *q = src + 1; q <= ptr; q++) {
     checksum ^= *q; // check sum.

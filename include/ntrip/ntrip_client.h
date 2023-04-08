@@ -31,6 +31,9 @@
 #include <string>
 #include <thread>  // NOLINT.
 #include <functional>
+#include <mutex>
+
+#include <stdio.h>
 
 #include "./thread_raii.h"
 
@@ -38,10 +41,13 @@
 namespace libntrip {
 
 using ClientCallback = std::function<void (char const* _buffer, int _size)>;
+using MessageCallback = std::function<void (int type, std::string_view message)>;
 
 class NtripClient {
  public:
   NtripClient() = default;
+  NtripClient(const MessageCallback& callback) :
+    message_callback_{callback} {}
   NtripClient(NtripClient const&) = delete;
   NtripClient(NtripClient&&) = delete;
   NtripClient& operator=(NtripClient const&) = delete;
@@ -66,8 +72,14 @@ class NtripClient {
   // 更新发送的GGA语句.
   // 根据ntrip账号的要求, 如果距离服务器位置过远, 服务器不会返回差分数据.
   void set_gga_buffer(std::string const& gga_buffer) {
+    std::lock_guard guard{gga_mutex_};
     gga_buffer_ = gga_buffer;
     gga_is_update_.store(true);
+  }
+  std::string get_gga_buffer() const
+  {
+    std::lock_guard guard{gga_mutex_};
+    return gga_buffer_;
   }
   // 设置固定位置坐标, 由此自动生成GGA数据.
   void set_location(double latitude, double longitude) {
@@ -102,6 +114,7 @@ class NtripClient {
   std::string passwd_;
   std::string mountpoint_;
   std::string gga_buffer_;
+  mutable std::mutex gga_mutex_;
 #if defined(WIN32) || defined(_WIN32)
   SOCKET socket_fd_ = INVALID_SOCKET;
 #else
@@ -109,6 +122,7 @@ class NtripClient {
 #endif  // defined(WIN32) || defined(_WIN32)
   Thread thread_;
   ClientCallback callback_ = [] (char const*, int) -> void {};
+  MessageCallback message_callback_ = [] (int type, std::string_view message) -> void { printf("type %d %s", type, message.data()); };
 };
 
 }  // namespace libntrip

@@ -31,8 +31,8 @@ namespace libntrip {
 int BccCheckSumCompareForGGA(char const* src);
 int Base64Encode(std::string const& raw, std::string* out);
 int Base64Decode(std::string const& raw, std::string* out);
-int GGAFrameGenerate(double latitude, double longitude,
-    double altitude, std::string* gga_out);
+int GGAFrameGenerate(double latitude, double longitude, int position_fix, int number_satellites,
+                     double altitude, double undulation, std::string* gga_out);
 
 }  // namespace libntrip
 
